@@ -1,0 +1,4 @@
+# Windows 依赖（不含 rumps：其依赖 pyobjc，Windows 不可安装）
+pystray>=0.19
+Pillow>=10
+requests>=2.31

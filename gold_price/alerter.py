@@ -1,12 +1,13 @@
 """告警模块。
 
-检测价格是否超出设定范围，通过 macOS 原生通知弹窗提醒。
+检测价格是否超出设定范围，通过平台原生弹窗提醒（macOS / Windows）。
 """
 
-import subprocess
 import logging
 from datetime import datetime, timedelta
 from typing import Optional, Dict
+
+from .platform_ui import show_critical_alert
 
 logger = logging.getLogger(__name__)
 
@@ -15,38 +16,21 @@ _last_alert_time: Dict[str, datetime] = {}
 
 
 def send_notification(title: str, message: str, sound: bool = True) -> bool:
-    """使用 macOS display alert 弹出不可忽略的模态弹窗。
+    """弹出不可忽略的模态告警弹窗（fire-and-forget）。
 
-    display alert 比 display notification 更醒目，
-    后者可能被通知中心静默收纳而不弹窗。
-    display alert as critical 自带系统提示音。
+    macOS: display alert as critical（比 notification 更醒目，
+    后者可能被通知中心静默收纳而不弹窗；自带系统提示音）。
+    Windows: MessageBoxW 原生弹窗。
 
     Args:
         title: 对话框标题
         message: 对话框内容
-        sound: 保留参数，display alert as critical 自带提示音
+        sound: 是否带提示音
 
     Returns:
         是否发送成功。
     """
-    # display alert 始终以模态弹窗显示，无法被忽略
-    # giving up after 30 秒后自动消失
-    script = (
-        f'display alert "{title}" message "{message}" '
-        f'as critical giving up after 30'
-    )
-    try:
-        # 使用 Popen 不等待对话框关闭，fire-and-forget
-        subprocess.Popen(
-            ["osascript", "-e", script],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        logger.info("告警弹窗已发送: %s - %s", title, message)
-        return True
-    except Exception as e:
-        logger.error("告警弹窗失败: %s", e)
-        return False
+    return show_critical_alert(title, message, sound=sound)
 
 
 def check_price_alert(

@@ -3,7 +3,7 @@
 基于 rumps 实现菜单栏价格显示、走势图打开、设置管理等功能。
 """
 
-import subprocess
+import sys
 import logging
 from typing import Optional
 
@@ -14,6 +14,7 @@ from .config import load_config, save_config, AppConfig
 from .storage import add_price_record, get_today_records, get_recent_days_records
 from .alerter import check_price_alert
 from .chart import launch_chart, kill_chart, write_chart_data, is_chart_running
+from .platform_ui import show_input_dialog, show_alert
 
 logger = logging.getLogger(__name__)
 
@@ -21,48 +22,6 @@ APP_NAME = "金价监控"
 REFRESH_MIN = 5
 REFRESH_MAX = 300
 DEFAULT_INTERVAL = 10  # 默认刷新间隔（秒）
-
-
-def _osascript_dialog(title: str, message: str, default_answer: str = "") -> Optional[str]:
-    """使用 AppleScript 弹出原生文本输入对话框。
-
-    Returns:
-        用户输入的文本，取消返回 None。
-    """
-    script = (
-        f'display dialog "{message}" '
-        f'with title "{title}" '
-        f'default answer "{default_answer}" '
-        f'buttons {{"取消", "确定"}} '
-        f'default button "确定"'
-    )
-    try:
-        result = subprocess.run(
-            ["osascript", "-e", script],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        if result.returncode != 0:
-            # 用户点了取消
-            if "User canceled" in result.stderr or result.returncode == 1:
-                return None
-            logger.warning("对话框异常: %s", result.stderr)
-            return None
-        # 输出格式: "button returned:确定, text returned:xxx"
-        output = result.stdout.strip()
-        if "text returned:" in output:
-            return output.split("text returned:")[1].strip()
-        return None
-    except Exception as e:
-        logger.error("osascript 对话框失败: %s", e)
-        return None
-
-
-def _osascript_alert(title: str, message: str):
-    """使用 AppleScript 弹出提示框。"""
-    script = f'display dialog "{message}" with title "{title}" buttons {{"确定"}} default button "确定"'
-    subprocess.run(["osascript", "-e", script], capture_output=True, timeout=30)
 
 
 class _BrightMenuItem(rumps.MenuItem):
@@ -91,6 +50,8 @@ class _BrightMenuItem(rumps.MenuItem):
         self._apply_bright()
 
     def _apply_bright(self):
+        if sys.platform != "darwin":
+            return  # 仅 macOS 支持 attributed title
         try:
             from AppKit import (
                 NSAttributedString,
@@ -233,7 +194,7 @@ class GoldPriceApp(rumps.App):
         default_g = (
             str(self._config.holding_grams) if self._config.holding_grams > 0 else ""
         )
-        result = _osascript_dialog(
+        result = show_input_dialog(
             title="设置持仓",
             message="请输入积存金持仓克重（克，最多4位小数，留空清除）：",
             default_answer=default_g,
@@ -243,16 +204,16 @@ class GoldPriceApp(rumps.App):
         try:
             grams = float(result.strip()) if result.strip() else 0.0
             if grams < 0:
-                _osascript_alert("错误", "持仓克重不能为负数")
+                show_alert("错误", "持仓克重不能为负数")
                 return
         except ValueError:
-            _osascript_alert("错误", "请输入有效的数字")
+            show_alert("错误", "请输入有效的数字")
             return
 
         default_c = (
             str(self._config.holding_cost) if self._config.holding_cost > 0 else ""
         )
-        result = _osascript_dialog(
+        result = show_input_dialog(
             title="设置持仓",
             message="请输入成本均价（元/克，2位小数）：",
             default_answer=default_c,
@@ -262,10 +223,10 @@ class GoldPriceApp(rumps.App):
         try:
             cost = float(result.strip()) if result.strip() else 0.0
             if cost < 0:
-                _osascript_alert("错误", "成本均价不能为负数")
+                show_alert("错误", "成本均价不能为负数")
                 return
         except ValueError:
-            _osascript_alert("错误", "请输入有效的数字")
+            show_alert("错误", "请输入有效的数字")
             return
 
         self._config.holding_grams = grams
@@ -349,7 +310,7 @@ class GoldPriceApp(rumps.App):
                 self._chart_menu.title = "📈 走势图表 (已打开)"
             except Exception as e:
                 logger.exception("打开走势图失败")
-                _osascript_alert("错误", f"打开走势图失败:\n{e}")
+                show_alert("错误", f"打开走势图失败:\n{e}")
 
     @staticmethod
     def _chart_data_key(days_data: list):
@@ -380,7 +341,7 @@ class GoldPriceApp(rumps.App):
 
     def _set_price_upper(self, sender):
         default_val = str(self._config.price_upper) if self._config.price_upper > 0 else ""
-        result = _osascript_dialog(
+        result = show_input_dialog(
             title="价格上限",
             message="设置价格上限（元/克），超过此价格将弹窗提醒：",
             default_answer=default_val,
@@ -390,17 +351,17 @@ class GoldPriceApp(rumps.App):
         try:
             val = float(result.strip()) if result.strip() else 0.0
             if val < 0:
-                _osascript_alert("错误", "价格上限不能为负数")
+                show_alert("错误", "价格上限不能为负数")
                 return
             self._config.price_upper = val
             save_config(self._config)
             self._update_settings_menu()
         except ValueError:
-            _osascript_alert("错误", "请输入有效的数字")
+            show_alert("错误", "请输入有效的数字")
 
     def _set_price_lower(self, sender):
         default_val = str(self._config.price_lower) if self._config.price_lower > 0 else ""
-        result = _osascript_dialog(
+        result = show_input_dialog(
             title="价格下限",
             message="设置价格下限（元/克），低于此价格将弹窗提醒：",
             default_answer=default_val,
@@ -410,16 +371,16 @@ class GoldPriceApp(rumps.App):
         try:
             val = float(result.strip()) if result.strip() else 0.0
             if val < 0:
-                _osascript_alert("错误", "价格下限不能为负数")
+                show_alert("错误", "价格下限不能为负数")
                 return
             self._config.price_lower = val
             save_config(self._config)
             self._update_settings_menu()
         except ValueError:
-            _osascript_alert("错误", "请输入有效的数字")
+            show_alert("错误", "请输入有效的数字")
 
     def _set_refresh_interval(self, sender):
-        result = _osascript_dialog(
+        result = show_input_dialog(
             title="刷新间隔",
             message=f"设置数据刷新间隔（{REFRESH_MIN}-{REFRESH_MAX} 秒）：",
             default_answer=str(self._config.refresh_interval),
@@ -434,7 +395,7 @@ class GoldPriceApp(rumps.App):
             self._update_settings_menu()
             self._setup_timer()
         except ValueError:
-            _osascript_alert("错误", "请输入有效的整数")
+            show_alert("错误", "请输入有效的整数")
 
     def _toggle_notifications(self, sender):
         self._config.notifications_enabled = not self._config.notifications_enabled
