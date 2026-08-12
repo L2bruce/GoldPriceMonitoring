@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# IDE
+.idea/
+
+# 打包产物（build/ 下的图标源文件 icon.icns 等要保留，勿忽略整个目录）
+build/GoldPrice/
+dist/
+installer/
+
+# 运行时数据
+.goldprice/

@@ -66,7 +66,7 @@ def _osascript_alert(title: str, message: str):
 
 
 class _BrightMenuItem(rumps.MenuItem):
-    """纯展示菜单项：文字强制亮金色，不受系统禁用态渲染变暗影响。
+    """纯展示菜单项：文字强制黑色，不受系统禁用态渲染变暗影响。
 
     rumps 对 callback 为 None 的项会 setAction_(None)，macOS 渲染偏灰。
     展示项不参与点击：恢复 enabled + 用 AttributedString 显式上色。
@@ -98,7 +98,7 @@ class _BrightMenuItem(rumps.MenuItem):
                 NSForegroundColorAttributeName,
             )
             color = NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                0.94, 0.70, 0.18, 1.0  # 亮金色 #f0b233
+                0.0, 0.0, 0.0, 1.0  # 纯黑（浅色菜单背景上清晰）
             )
             attr = NSAttributedString.alloc().initWithString_attributes_(
                 self._menuitem.title(), {NSForegroundColorAttributeName: color}
