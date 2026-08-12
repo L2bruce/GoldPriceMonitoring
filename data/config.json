@@ -1,0 +1,7 @@
+{
+  "price_upper": 0.0,
+  "price_lower": 0.0,
+  "refresh_interval": 10,
+  "notifications_enabled": true,
+  "alert_cooldown": 300
+}

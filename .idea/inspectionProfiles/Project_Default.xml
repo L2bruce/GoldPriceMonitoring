@@ -1,0 +1,27 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <option name="myName" value="Project Default" />
+    <inspection_tool class="PyPackageRequirementsInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredPackages">
+        <list>
+          <option value="pytest" />
+          <option value="pytest-xdist" />
+          <option value="pytest-rerunfailures" />
+          <option value="pytest-html" />
+          <option value="allure-pytest" />
+          <option value="allure-python-commons" />
+          <option value="requests" />
+          <option value="requests-toolbelt" />
+          <option value="PyYAML" />
+          <option value="jsonpath-ng" />
+          <option value="jsonschema" />
+          <option value="pymysql" />
+          <option value="redis" />
+          <option value="Faker" />
+          <option value="python-dotenv" />
+          <option value="Jinja2" />
+        </list>
+      </option>
+    </inspection_tool>
+  </profile>
+</component>
