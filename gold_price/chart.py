@@ -54,6 +54,9 @@ function baseLayout(title) {
     title: {text: title, font:{color:'#cdd6f4', size:16}},
     paper_bgcolor:'#1e1e2e', plot_bgcolor:'#1e1e2e',
     font:{color:'#cdd6f4', family:'PingFang SC, Heiti SC, sans-serif'},
+    // 拖拽 = 平移而非框选缩放：默认 zoom 模式鼠标一拖一放会把视图缩放到
+    // 框选范围，框没框住折线时折线就"偏离页面范围看不见了"
+    dragmode:'pan',
     xaxis:{type:'date', gridcolor:'#313244', tickfont:{color:'#a6adc8', size:11},
            rangeselector:{
              bgcolor:'#45475a',
@@ -68,8 +71,9 @@ function baseLayout(title) {
                {count:30, label:'30天', step:'day', stepmode:'backward'}
              ]
            }},
+    // y 轴固定范围：滚轮缩放/拖拽只作用于 x 轴（时间），折线永远不会被缩出图外
     yaxis:{title:{text:'价格 (元/克)', font:{color:'#cdd6f4'}},
-           gridcolor:'#313244', tickfont:{color:'#a6adc8'}},
+           gridcolor:'#313244', tickfont:{color:'#a6adc8'}, fixedrange:true},
     margin:{l:60, r:30, t:60, b:50},
     hovermode:'x',
     hoverlabel:{bgcolor:'#313244', bordercolor:'#585b70', font:{color:'#cdd6f4'}},
@@ -138,10 +142,23 @@ async function refresh() {
       scrollZoom: true,
       responsive: true
     });
-    // 监听视图变化（rangeselector 按钮 / 滚轮缩放 / 框选），刷新时保持用户选择
+    // 监听视图变化（rangeselector 按钮 / 滚轮缩放 / 拖拽平移），刷新时保持用户选择
+    // 注意两种事件形式：拖拽/滚轮产生 xaxis.range 数组，
+    // 点 rangeselector 按钮产生 xaxis.range[0]/xaxis.range[1] 两个键。
+    // 只记数组形式会导致点完"1天"等按钮后，5 秒刷新把视图弹回旧范围。
     if (!gdBound) {
       document.getElementById('chart').on('plotly_relayout', (e) => {
-        if (Array.isArray(e['xaxis.range'])) lastRange = e['xaxis.range'];
+        if (Array.isArray(e['xaxis.range'])) {
+          lastRange = e['xaxis.range'];
+        } else if (e['xaxis.range[0]'] !== undefined && e['xaxis.range[1]'] !== undefined) {
+          lastRange = [e['xaxis.range[0]'], e['xaxis.range[1]']];
+        } else if (e['xaxis.autorange'] === true) {
+          // 双击重置视图：从当前实际布局读取重置后的范围，避免刷新弹回旧视图
+          const el = document.getElementById('chart');
+          if (el && el._fullLayout && el._fullLayout.xaxis && el._fullLayout.xaxis.range) {
+            lastRange = el._fullLayout.xaxis.range.slice();
+          }
+        }
       });
       gdBound = true;
     }
@@ -215,7 +232,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def launch_chart():
-    """启动走势图 HTTP 服务线程并打开浏览器。"""
+    """启动走势图 HTTP 服务线程。"""
     global _httpd
     if _httpd is not None:
         return  # 已在运行
@@ -232,7 +249,17 @@ def launch_chart():
 
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     _httpd = httpd
-    webbrowser.open(f"http://127.0.0.1:{httpd.server_address[1]}/")
+
+
+def open_chart_page():
+    """在默认浏览器中打开走势图页面。
+
+    每次调用都会新开标签页并激活浏览器，保证用户一定能看到页面
+    （不依赖浏览器是否已有旧标签页）。
+    """
+    if _httpd is None:
+        return
+    webbrowser.open(f"http://127.0.0.1:{_httpd.server_address[1]}/")
 
 
 def kill_chart():

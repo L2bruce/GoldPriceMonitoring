@@ -13,7 +13,12 @@ from .fetcher import fetch_price, GoldPrice
 from .config import load_config, save_config, AppConfig
 from .storage import add_price_record, get_today_records, get_recent_days_records
 from .alerter import check_price_alert
-from .chart import launch_chart, kill_chart, write_chart_data, is_chart_running
+from .chart import (
+    launch_chart,
+    open_chart_page,
+    write_chart_data,
+    is_chart_running,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +136,7 @@ class GoldPriceApp(rumps.App):
         # ── 菜单 ──
         self._price_display = _make_display_item("")
 
-        self._chart_menu = rumps.MenuItem("📈 打开走势图", callback=self._toggle_chart)
+        self._chart_menu = rumps.MenuItem("📈 打开走势图", callback=self._open_chart)
 
         self._settings_upper = rumps.MenuItem(
             "价格上限: 不限", callback=self._set_price_upper
@@ -319,7 +324,6 @@ class GoldPriceApp(rumps.App):
                     self._update_chart()
                 else:
                     self._chart_open = False
-                    self._chart_menu.title = "📈 打开走势图"
 
         except Exception:
             logger.exception("更新价格异常")
@@ -330,14 +334,19 @@ class GoldPriceApp(rumps.App):
 
     # ── 走势图 ──
 
-    def _toggle_chart(self, sender):
-        if self._chart_open:
-            kill_chart()
-            self._chart_open = False
-            self._chart_menu.title = "📈 打开走势图"
-        else:
-            try:
-                # 先写入最新数据（30 天全量，覆盖 1/3/7/30 天所有视图），再启动图表进程
+    def _open_chart(self, sender):
+        """打开走势图：无论当前是否已打开，单击后浏览器一定重新弹出页面。
+
+        之前是开关式（toggle）：图表已打开时再点会变成"关闭"，页面没弹出，
+        用户只能再点一次——表现为"要点击两次才能弹出"。拆成打开/关闭两项后，
+        点击打开始终弹出页面。
+        """
+        try:
+            if is_chart_running():
+                # 已打开：刷新最新数据，再弹一次页面（新标签页，保证页面可见）
+                self._update_chart()
+            else:
+                # 先写入最新数据（30 天全量，覆盖 1/3/7/30 天所有视图），再启动服务
                 days_data = get_recent_days_records(days=30)
                 yesterday = (
                     self._current_price.yesterday_price if self._current_price else 0
@@ -345,11 +354,11 @@ class GoldPriceApp(rumps.App):
                 write_chart_data(days_data, yesterday)
                 self._chart_last_key = self._chart_data_key(days_data)
                 launch_chart()
-                self._chart_open = True
-                self._chart_menu.title = "📈 走势图表 (已打开)"
-            except Exception as e:
-                logger.exception("打开走势图失败")
-                _osascript_alert("错误", f"打开走势图失败:\n{e}")
+            self._chart_open = True
+            open_chart_page()
+        except Exception as e:
+            logger.exception("打开走势图失败")
+            _osascript_alert("错误", f"打开走势图失败:\n{e}")
 
     @staticmethod
     def _chart_data_key(days_data: list):
