@@ -12,7 +12,7 @@ import rumps
 from .fetcher import fetch_price, GoldPrice
 from .config import load_config, save_config, AppConfig
 from .storage import add_price_record, get_today_records, get_recent_days_records
-from .alerter import check_price_alert
+from .alerter import check_price_alert, reset_alert_cooldown
 from .chart import (
     launch_chart,
     open_chart_page,
@@ -26,6 +26,13 @@ APP_NAME = "金价监控"
 REFRESH_MIN = 5
 REFRESH_MAX = 300
 DEFAULT_INTERVAL = 10  # 默认刷新间隔（秒）
+COOLDOWN_PRESETS = [5, 10, 30, 60]  # 告警周期预设选项（分钟）
+DISPLAY_MODES = [
+    ("full", "完整模式 (¥价格 ↑+%)"),
+    ("compact", "紧凑模式 (价格 ↑+%)"),
+    ("minimal", "极简模式 (价格 ↑)"),
+    ("icon", "仅图标 (💰)"),
+]
 
 
 def _osascript_dialog(title: str, message: str, default_answer: str = "") -> Optional[str]:
@@ -71,19 +78,14 @@ def _osascript_alert(title: str, message: str):
 
 
 class _BrightMenuItem(rumps.MenuItem):
-    """纯展示菜单项：文字强制黑色，不受系统禁用态渲染变暗影响。
+    """展示类菜单项：文字清晰饱满、加粗高亮，自适应浅色/深色模式。
 
-    rumps 对 callback 为 None 的项会 setAction_(None)，macOS 渲染偏灰。
-    展示项不参与点击：恢复 enabled + 用 AttributedString 显式上色。
-    rumps 更新 title（setTitle_）会清空 attributed title，故 setter 里重设。
+    macOS 默认会将无回调的菜单项置为灰色禁用态。
+    通过赋予回调、设置加粗字体与保持 enabled，确保在浅色/深色模式下均清晰可见。
     """
 
-    def __init__(self, title):
-        super().__init__(title)
-        try:
-            self._menuitem.setEnabled_(True)
-        except AttributeError:
-            pass
+    def __init__(self, title, callback=None):
+        super().__init__(title, callback=callback)
         self._apply_bright()
 
     @property
@@ -99,23 +101,22 @@ class _BrightMenuItem(rumps.MenuItem):
         try:
             from AppKit import (
                 NSAttributedString,
-                NSColor,
-                NSForegroundColorAttributeName,
+                NSFont,
+                NSFontAttributeName,
             )
-            color = NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                0.0, 0.0, 0.0, 1.0  # 纯黑（浅色菜单背景上清晰）
-            )
+            font = NSFont.boldSystemFontOfSize_(13.5)
             attr = NSAttributedString.alloc().initWithString_attributes_(
-                self._menuitem.title(), {NSForegroundColorAttributeName: color}
+                self._menuitem.title(), {NSFontAttributeName: font}
             )
             self._menuitem.setAttributedTitle_(attr)
+            self._menuitem.setEnabled_(True)
         except Exception:
-            pass  # 上色失败退回系统默认
+            pass
 
 
-def _make_display_item(title: str) -> rumps.MenuItem:
-    """创建纯展示菜单项（亮色文字）。"""
-    return _BrightMenuItem(title)
+def _make_display_item(title: str, callback=None) -> rumps.MenuItem:
+    """创建清晰展示菜单项。"""
+    return _BrightMenuItem(title, callback=callback)
 
 
 class GoldPriceApp(rumps.App):
@@ -134,7 +135,7 @@ class GoldPriceApp(rumps.App):
         self._chart_last_key = None  # 图表数据指纹（最后一条记录的 time+price）
 
         # ── 菜单 ──
-        self._price_display = _make_display_item("")
+        self._price_display = _make_display_item("", callback=self._open_chart)
 
         self._chart_menu = rumps.MenuItem("📈 打开走势图", callback=self._open_chart)
 
@@ -144,6 +145,32 @@ class GoldPriceApp(rumps.App):
         self._settings_lower = rumps.MenuItem(
             "价格下限: 不限", callback=self._set_price_lower
         )
+        self._settings_cooldown = rumps.MenuItem("告警周期: 30分钟")
+        self._cooldown_items = {}
+        for mins in COOLDOWN_PRESETS:
+            item = rumps.MenuItem(
+                f"{mins}分钟",
+                callback=self._make_cooldown_callback(mins),
+            )
+            self._settings_cooldown.add(item)
+            self._cooldown_items[mins] = item
+
+        self._cooldown_custom_item = rumps.MenuItem(
+            "自定义...",
+            callback=self._set_cooldown_custom,
+        )
+        self._settings_cooldown.add(self._cooldown_custom_item)
+
+        self._settings_display_mode = rumps.MenuItem("显示样式: 完整模式")
+        self._display_mode_items = {}
+        for mode_key, mode_label in DISPLAY_MODES:
+            item = rumps.MenuItem(
+                mode_label,
+                callback=self._make_display_mode_callback(mode_key),
+            )
+            self._settings_display_mode.add(item)
+            self._display_mode_items[mode_key] = item
+
         self._settings_interval = rumps.MenuItem(
             f"刷新间隔: {DEFAULT_INTERVAL}秒", callback=self._set_refresh_interval
         )
@@ -154,14 +181,17 @@ class GoldPriceApp(rumps.App):
         settings_menu = rumps.MenuItem("⚙️ 设置")
         settings_menu.add(self._settings_upper)
         settings_menu.add(self._settings_lower)
+        settings_menu.add(self._settings_cooldown)
+        settings_menu.add(rumps.separator)
+        settings_menu.add(self._settings_display_mode)
         settings_menu.add(self._settings_interval)
         settings_menu.add(rumps.separator)
         settings_menu.add(self._settings_notify)
 
         # ── 我的持仓 ──
-        self._holding_grams = _make_display_item("持仓克重: 未设置")
-        self._holding_cost = _make_display_item("成本均价: 未设置")
-        self._holding_profit = _make_display_item("持仓收益: --")
+        self._holding_grams = _make_display_item("持仓克重: 未设置", callback=self._set_holding)
+        self._holding_cost = _make_display_item("成本均价: 未设置", callback=self._set_holding)
+        self._holding_profit = _make_display_item("持仓收益: --", callback=self._set_holding)
         self._holding_set = rumps.MenuItem("✏️ 设置持仓", callback=self._set_holding)
 
         holding_menu = rumps.MenuItem("📦 我的持仓")
@@ -180,6 +210,16 @@ class GoldPriceApp(rumps.App):
             rumps.separator,
             None,  # quit_button
         ]
+
+        # 禁用菜单和子菜单的自动置灰，确保所有信息项始终保持清晰高亮
+        try:
+            if hasattr(self.menu, "_menu") and self.menu._menu:
+                self.menu._menu.setAutoenablesItems_(False)
+            holding_sub = holding_menu._menuitem.submenu()
+            if holding_sub:
+                holding_sub.setAutoenablesItems_(False)
+        except Exception:
+            pass
 
         self._update_settings_menu()
         self._update_holding_menu()
@@ -209,6 +249,36 @@ class GoldPriceApp(rumps.App):
         )
         self._settings_interval.title = f"刷新间隔: {cfg.refresh_interval}秒"
         self._settings_notify.title = "🔔 通知: 开" if cfg.notifications_enabled else "🔕 通知: 关"
+
+        # 告警周期
+        mins = cfg.alert_cooldown // 60
+        if mins > 0 and cfg.alert_cooldown % 60 == 0:
+            self._settings_cooldown.title = f"告警周期: {mins}分钟"
+        elif mins > 0:
+            self._settings_cooldown.title = f"告警周期: {mins}分{cfg.alert_cooldown % 60}秒"
+        else:
+            self._settings_cooldown.title = f"告警周期: {cfg.alert_cooldown}秒"
+
+        matched = False
+        for p_mins, item in self._cooldown_items.items():
+            if cfg.alert_cooldown == p_mins * 60:
+                item.state = 1
+                matched = True
+            else:
+                item.state = 0
+        self._cooldown_custom_item.state = 1 if not matched else 0
+
+        # 显示样式
+        mode_titles = {
+            "full": "完整模式",
+            "compact": "紧凑模式",
+            "minimal": "极简模式",
+            "icon": "仅图标",
+        }
+        current_mode = getattr(cfg, "display_mode", "full")
+        self._settings_display_mode.title = f"显示样式: {mode_titles.get(current_mode, '完整模式')}"
+        for m_key, item in self._display_mode_items.items():
+            item.state = 1 if current_mode == m_key else 0
 
     # ── 我的持仓 ──
 
@@ -330,7 +400,15 @@ class GoldPriceApp(rumps.App):
 
     def _update_title(self, price: GoldPrice):
         arrow = "↑" if price.price_change >= 0 else "↓"
-        self.title = f"¥{price.price:.2f} {arrow}{price.change_rate}"
+        mode = getattr(self._config, "display_mode", "full")
+        if mode == "icon":
+            self.title = "💰"
+        elif mode == "minimal":
+            self.title = f"{price.price:.2f} {arrow}"
+        elif mode == "compact":
+            self.title = f"{price.price:.2f} {arrow}{price.change_rate}"
+        else:  # "full"
+            self.title = f"¥{price.price:.2f} {arrow}{price.change_rate}"
 
     # ── 走势图 ──
 
@@ -403,6 +481,7 @@ class GoldPriceApp(rumps.App):
                 return
             self._config.price_upper = val
             save_config(self._config)
+            reset_alert_cooldown("upper")
             self._update_settings_menu()
         except ValueError:
             _osascript_alert("错误", "请输入有效的数字")
@@ -423,9 +502,48 @@ class GoldPriceApp(rumps.App):
                 return
             self._config.price_lower = val
             save_config(self._config)
+            reset_alert_cooldown("lower")
             self._update_settings_menu()
         except ValueError:
             _osascript_alert("错误", "请输入有效的数字")
+
+    def _make_cooldown_callback(self, minutes: int):
+        def _callback(sender):
+            self._config.alert_cooldown = minutes * 60
+            save_config(self._config)
+            self._update_settings_menu()
+        return _callback
+
+    def _set_cooldown_custom(self, sender):
+        current_mins = max(1, self._config.alert_cooldown // 60)
+        result = _osascript_dialog(
+            title="告警周期",
+            message="设置告警周期（分钟，越界告警后在此周期内不再弹窗）：",
+            default_answer=str(current_mins),
+        )
+        if result is None:
+            return
+        try:
+            val = int(result.strip()) if result.strip() else current_mins
+            if val < 1:
+                _osascript_alert("错误", "告警周期不能小于 1 分钟")
+                return
+            self._config.alert_cooldown = val * 60
+            save_config(self._config)
+            self._update_settings_menu()
+        except ValueError:
+            _osascript_alert("错误", "请输入有效的整数")
+
+    def _make_display_mode_callback(self, mode: str):
+        def _callback(sender):
+            self._config.display_mode = mode
+            save_config(self._config)
+            self._update_settings_menu()
+            if self._current_price:
+                self._update_title(self._current_price)
+            elif mode == "icon":
+                self.title = "💰"
+        return _callback
 
     def _set_refresh_interval(self, sender):
         result = _osascript_dialog(

@@ -37,9 +37,9 @@ main.py                         # 入口：初始化并启动 rumps 菜单栏应
 gold_price/
 ├── app.py                      # rumps 菜单栏应用主体（定时轮询、菜单交互）
 ├── fetcher.py                  # API 数据获取（主 + 备用接口，自动降级）
-├── config.py                   # 配置管理（价格范围、刷新间隔、通知开关）
+├── config.py                   # 配置管理（价格范围、刷新间隔、告警周期、显示样式、通知开关）
 ├── storage.py                  # JSON 价格历史存储（按日期分组，自动清理）
-├── alerter.py                  # 价格越界检测 + macOS osascript 弹窗通知
+├── alerter.py                  # 价格越界检测 + macOS osascript 弹窗通知（支持冷却周期）
 ├── chart.py                    # Plotly 浏览器图表：本进程内本地 HTTP 服务线程
 └── __init__.py
 ~/.goldprice/                   # 运行时数据（用户目录，打包后不变）

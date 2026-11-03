@@ -16,9 +16,10 @@ DEFAULT_CONFIG = {
     "price_lower": 0.0,        # 价格下限，0 表示不监控下限
     "refresh_interval": 10,     # 刷新间隔（秒），最小 5 秒
     "notifications_enabled": True,  # 是否启用通知
-    "alert_cooldown": 300,      # 告警冷却时间（秒），避免连续弹窗
+    "alert_cooldown": 1800,     # 告警冷却时间（秒），默认 30 分钟，避免频繁弹窗
     "holding_grams": 0.0,       # 持仓克重（克，4位小数），0 表示未设置
     "holding_cost": 0.0,        # 成本均价（元/克，2位小数），0 表示未设置
+    "display_mode": "full",     # 显示模式: full(完整) / compact(紧凑) / minimal(极简) / icon(仅图标)
 }
 
 
@@ -30,9 +31,10 @@ class AppConfig:
     price_lower: float = 0.0
     refresh_interval: int = 10
     notifications_enabled: bool = True
-    alert_cooldown: int = 300
+    alert_cooldown: int = 1800
     holding_grams: float = 0.0
     holding_cost: float = 0.0
+    display_mode: str = "full"
 
     def validate(self) -> dict[str, str]:
         """校验配置值，返回错误字典（字段名 -> 错误信息）。"""
@@ -51,6 +53,8 @@ class AppConfig:
             errors["holding_grams"] = "持仓克重不能为负数"
         if self.holding_cost < 0:
             errors["holding_cost"] = "成本均价不能为负数"
+        if self.display_mode not in ("full", "compact", "minimal", "icon"):
+            errors["display_mode"] = "未知显示模式"
         return errors
 
     @property

@@ -14,6 +14,20 @@ logger = logging.getLogger(__name__)
 _last_alert_time: Dict[str, datetime] = {}
 
 
+def reset_alert_cooldown(alert_type: Optional[str] = None) -> None:
+    """重置告警冷却时间。
+
+    Args:
+        alert_type: 'upper' / 'lower' / None（None 表示重置全部）。
+    """
+    global _last_alert_time
+    if alert_type:
+        _last_alert_time.pop(alert_type, None)
+    else:
+        _last_alert_time.clear()
+    logger.debug("告警冷却已重置: %s", alert_type or "全部")
+
+
 def send_notification(title: str, message: str, sound: bool = True) -> bool:
     """使用 macOS display alert 弹出不可忽略的模态弹窗。
 
@@ -91,12 +105,23 @@ def check_price_alert(
         return None
 
     # 发送通知
+    cooldown_str = (
+        f"{cooldown_seconds // 60}分钟"
+        if cooldown_seconds >= 60
+        else f"{cooldown_seconds}秒"
+    )
     if alert_type == "upper":
         title = "⚠️ 金价突破上限"
-        message = f"当前价格 ¥{price}/克，已超过上限 ¥{price_upper}/克（{change_rate}）"
+        message = (
+            f"当前价格 ¥{price}/克，已超过上限 ¥{price_upper}/克（{change_rate}）。\n"
+            f"（{cooldown_str}内不再重复提示）"
+        )
     else:
         title = "📉 金价跌破下限"
-        message = f"当前价格 ¥{price}/克，已跌破下限 ¥{price_lower}/克（{change_rate}）"
+        message = (
+            f"当前价格 ¥{price}/克，已跌破下限 ¥{price_lower}/克（{change_rate}）。\n"
+            f"（{cooldown_str}内不再重复提示）"
+        )
 
     if send_notification(title, message):
         _last_alert_time[alert_type] = now
