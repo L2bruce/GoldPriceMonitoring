@@ -22,6 +22,7 @@ source .venv/bin/activate
 python main.py              # 启动菜单栏应用
 python main.py --debug      # 调试模式（输出详细日志）
 python init_history.py      # 一次性初始化：导入近30个交易日金价日线估算数据
+python generate_icon.py     # 按 macOS 规范生成应用图标（824x824主体+阴影）
 ./build_app.sh              # 打包 .app 并部署到 ~/Applications/（含 LSUIElement 隐藏 Dock 图标）
 ```
 

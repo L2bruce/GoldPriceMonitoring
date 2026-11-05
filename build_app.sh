@@ -9,6 +9,9 @@ cd "$(dirname "$0")"
 APP_NAME=GoldPrice
 DEST="$HOME/Applications/${APP_NAME}.app"
 
+echo "==> 生成规范应用图标"
+python3 generate_icon.py
+
 echo "==> PyInstaller 打包"
 .venv/bin/pyinstaller --noconfirm --clean --windowed --name "$APP_NAME" \
   --icon build/icon.icns --collect-data plotly \
@@ -20,5 +23,6 @@ echo "==> 写入 LSUIElement=true（隐藏 Dock 图标）"
 echo "==> 部署到 $DEST"
 rm -rf "$DEST"
 ditto "dist/${APP_NAME}.app" "$DEST"
+touch "$DEST"
 
 echo "==> 完成"
