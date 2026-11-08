@@ -28,6 +28,11 @@ def reset_alert_cooldown(alert_type: Optional[str] = None) -> None:
     logger.debug("告警冷却已重置: %s", alert_type or "全部")
 
 
+def _escape_applescript(s) -> str:
+    """转义 AppleScript 字符串中的反斜杠和双引号。"""
+    return str(s).replace("\\", "\\\\").replace('"', '\\"')
+
+
 def send_notification(title: str, message: str, sound: bool = True) -> bool:
     """使用 macOS display alert 弹出不可忽略的模态弹窗。
 
@@ -43,10 +48,12 @@ def send_notification(title: str, message: str, sound: bool = True) -> bool:
     Returns:
         是否发送成功。
     """
+    safe_title = _escape_applescript(title)
+    safe_msg = _escape_applescript(message)
     # display alert 始终以模态弹窗显示，无法被忽略
     # giving up after 30 秒后自动消失
     script = (
-        f'display alert "{title}" message "{message}" '
+        f'display alert "{safe_title}" message "{safe_msg}" '
         f'as critical giving up after 30'
     )
     try:

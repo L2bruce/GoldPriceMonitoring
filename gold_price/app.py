@@ -5,8 +5,10 @@
 
 import subprocess
 import logging
+import threading
 from typing import Optional
 
+from PyObjCTools import AppHelper
 import rumps
 
 from .fetcher import fetch_price, GoldPrice
@@ -35,16 +37,24 @@ DISPLAY_MODES = [
 ]
 
 
+def _escape_applescript(s) -> str:
+    """转义 AppleScript 字符串中的反斜杠和双引号，防止语法报错或解析异常。"""
+    return str(s).replace("\\", "\\\\").replace('"', '\\"')
+
+
 def _osascript_dialog(title: str, message: str, default_answer: str = "") -> Optional[str]:
     """使用 AppleScript 弹出原生文本输入对话框。
 
     Returns:
         用户输入的文本，取消返回 None。
     """
+    safe_title = _escape_applescript(title)
+    safe_message = _escape_applescript(message)
+    safe_default = _escape_applescript(default_answer)
     script = (
-        f'display dialog "{message}" '
-        f'with title "{title}" '
-        f'default answer "{default_answer}" '
+        f'display dialog "{safe_message}" '
+        f'with title "{safe_title}" '
+        f'default answer "{safe_default}" '
         f'buttons {{"取消", "确定"}} '
         f'default button "确定"'
     )
@@ -73,7 +83,9 @@ def _osascript_dialog(title: str, message: str, default_answer: str = "") -> Opt
 
 def _osascript_alert(title: str, message: str):
     """使用 AppleScript 弹出提示框。"""
-    script = f'display dialog "{message}" with title "{title}" buttons {{"确定"}} default button "确定"'
+    safe_title = _escape_applescript(title)
+    safe_message = _escape_applescript(message)
+    script = f'display dialog "{safe_message}" with title "{safe_title}" buttons {{"确定"}} default button "确定"'
     subprocess.run(["osascript", "-e", script], capture_output=True, timeout=30)
 
 
@@ -133,6 +145,7 @@ class GoldPriceApp(rumps.App):
         self._chart_open = False
         self._fetch_error_count = 0
         self._chart_last_key = None  # 图表数据指纹（最后一条记录的 time+price）
+        self._is_fetching = False    # 异步拉取防重标记
 
         # ── 菜单 ──
         self._price_display = _make_display_item("", callback=self._open_chart)
@@ -350,9 +363,30 @@ class GoldPriceApp(rumps.App):
 
     # ── 价格获取 ──
 
-    def _fetch_and_update(self, sender):
+    def _fetch_and_update(self, sender=None):
+        """定时器触发的价格拉取（转入后台工作线程，不阻塞 UI 主线程）。"""
+        if self._is_fetching:
+            logger.debug("上一轮价格获取尚未完成，跳过本次触发")
+            return
+
+        def _worker():
+            self._is_fetching = True
+            try:
+                price = fetch_price()
+                try:
+                    AppHelper.callAfter(self._on_price_fetched, price)
+                except Exception:
+                    self._on_price_fetched(price)
+            except Exception:
+                logger.exception("异步获取价格工作线程异常")
+            finally:
+                self._is_fetching = False
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_price_fetched(self, price: Optional[GoldPrice]):
+        """在 UI 主线程中接收拉取结果并更新界面、历史记录和告警。"""
         try:
-            price = fetch_price()
             if price is None:
                 self._fetch_error_count += 1
                 if self._fetch_error_count >= 3:
@@ -479,6 +513,9 @@ class GoldPriceApp(rumps.App):
             if val < 0:
                 _osascript_alert("错误", "价格上限不能为负数")
                 return
+            if val > 0 and self._config.price_lower > 0 and val <= self._config.price_lower:
+                _osascript_alert("错误", f"价格上限 (¥{val:.1f}) 必须大于价格下限 (¥{self._config.price_lower:.1f})")
+                return
             self._config.price_upper = val
             save_config(self._config)
             reset_alert_cooldown("upper")
@@ -499,6 +536,9 @@ class GoldPriceApp(rumps.App):
             val = float(result.strip()) if result.strip() else 0.0
             if val < 0:
                 _osascript_alert("错误", "价格下限不能为负数")
+                return
+            if val > 0 and self._config.price_upper > 0 and val >= self._config.price_upper:
+                _osascript_alert("错误", f"价格下限 (¥{val:.1f}) 必须小于价格上限 (¥{self._config.price_upper:.1f})")
                 return
             self._config.price_lower = val
             save_config(self._config)

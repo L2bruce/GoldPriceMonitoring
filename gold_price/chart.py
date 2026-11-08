@@ -23,6 +23,20 @@ PORT_RANGE = range(8787, 8800)
 _PLOTLY_JS_PATH = os.path.join(
     os.path.dirname(plotly.__file__), "package_data", "plotly.min.js"
 )
+_PLOTLY_JS_CACHE = None
+
+
+def _get_plotly_js() -> bytes:
+    """获取 Plotly.min.js 的字节数据（内存缓存，避免高频磁盘读取）。"""
+    global _PLOTLY_JS_CACHE
+    if _PLOTLY_JS_CACHE is None:
+        if os.path.exists(_PLOTLY_JS_PATH):
+            with open(_PLOTLY_JS_PATH, "rb") as f:
+                _PLOTLY_JS_CACHE = f.read()
+        else:
+            _PLOTLY_JS_CACHE = b""
+    return _PLOTLY_JS_CACHE
+
 
 # 当前 HTTP 服务（None = 未打开图表）
 _httpd = None
@@ -33,7 +47,7 @@ HTML_PAGE = """<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
-<title>浙商积存金 - 近三天走势</title>
+<title>浙商积存金 - 价格走势</title>
 <style>
 html,body{margin:0;padding:0;height:100%;background:#1e1e2e}
 #chart{width:100%;height:100vh}
@@ -43,7 +57,8 @@ html,body{margin:0;padding:0;height:100%;background:#1e1e2e}
 <div id="chart"></div>
 <script src="/plotly.min.js"></script>
 <script>
-const C = {up:'#a6e3a1', down:'#f38ba8', yellow:'#f9e2af'};
+// 国内市场红涨绿跌：up 为红色，down 为绿色
+const C = {up:'#f38ba8', down:'#a6e3a1', yellow:'#f9e2af'};
 // 当前用户视图范围：刷新时显式传回，防止 Plotly 重新自动计算
 // （x 轴无显式 range 时 rangeselector 会默认用最后一个按钮 = 30天）
 let lastRange = null;
@@ -95,7 +110,13 @@ function buildTraces(d) {
     return {traces: [], layout: baseLayout('浙商积存金 - 等待数据...')};
   }
 
-  const up = y[y.length-1] >= y[0];
+  const basePrice = (d.yesterday_price && d.yesterday_price > 0) ? d.yesterday_price : y[0];
+  const currentPrice = y[y.length-1];
+  const up = currentPrice >= basePrice;
+  const diff = currentPrice - basePrice;
+  const diffRate = basePrice ? ((diff / basePrice) * 100).toFixed(2) + '%' : '0.00%';
+  const sign = diff >= 0 ? '+' : '';
+
   const color = up ? C.up : C.down;
   const trace = {
     x, y, type:'scatter', mode:'lines+markers',
@@ -104,7 +125,8 @@ function buildTraces(d) {
   };
 
   const layout = baseLayout(
-    '浙商积存金 近三天走势 | ¥' + y[y.length-1].toFixed(2) +
+    '浙商积存金走势 | ¥' + currentPrice.toFixed(2) +
+    ' (' + sign + diff.toFixed(2) + ', ' + sign + diffRate + ')' +
     (up ? ' ↑' : ' ↓')
   );
   if (d.yesterday_price) {
@@ -143,9 +165,6 @@ async function refresh() {
       responsive: true
     });
     // 监听视图变化（rangeselector 按钮 / 滚轮缩放 / 拖拽平移），刷新时保持用户选择
-    // 注意两种事件形式：拖拽/滚轮产生 xaxis.range 数组，
-    // 点 rangeselector 按钮产生 xaxis.range[0]/xaxis.range[1] 两个键。
-    // 只记数组形式会导致点完"1天"等按钮后，5 秒刷新把视图弹回旧范围。
     if (!gdBound) {
       document.getElementById('chart').on('plotly_relayout', (e) => {
         if (Array.isArray(e['xaxis.range'])) {
@@ -177,14 +196,16 @@ setInterval(refresh, 5000);
 
 
 def write_chart_data(days_data: list, yesterday_price: float):
-    """将走势图数据写入 JSON 文件，供页面轮询读取。"""
+    """将走势图数据原子写入 JSON 文件，供页面轮询读取。"""
     os.makedirs(DATA_DIR, exist_ok=True)
     data = {
         "days": days_data,
         "yesterday_price": yesterday_price,
     }
-    with open(CHART_DATA_FILE, "w", encoding="utf-8") as f:
+    temp_file = f"{CHART_DATA_FILE}.tmp"
+    with open(temp_file, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False)
+    os.replace(temp_file, CHART_DATA_FILE)
 
 
 # ── HTTP 服务 ──────────────────────────────────────
@@ -207,13 +228,15 @@ class Handler(BaseHTTPRequestHandler):
             if self.path in ("/", "/index.html"):
                 body = HTML_PAGE.encode("utf-8")
                 ctype = "text/html; charset=utf-8"
+                cache_header = "no-store"
             elif self.path == "/plotly.min.js":
-                with open(_PLOTLY_JS_PATH, "rb") as f:
-                    body = f.read()
+                body = _get_plotly_js()
                 ctype = "application/javascript"
+                cache_header = "public, max-age=31536000, immutable"
             elif self.path == "/data":
                 body = _read_data()
                 ctype = "application/json; charset=utf-8"
+                cache_header = "no-store"
             else:
                 self.send_error(404)
                 return
@@ -221,7 +244,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
+            self.send_header("Cache-Control", cache_header)
             self.end_headers()
             self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError):

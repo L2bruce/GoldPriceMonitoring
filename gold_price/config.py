@@ -5,8 +5,11 @@
 
 import json
 import os
+import logging
 from dataclasses import dataclass, field, asdict
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 # 配置在用户目录（打包成 .app 后项目目录不可写/位置可变）
 CONFIG_FILE = os.path.join(os.path.expanduser("~/.goldprice"), "config.json")
@@ -84,7 +87,12 @@ def load_config() -> AppConfig:
 
 
 def save_config(config: AppConfig) -> None:
-    """保存配置到文件。"""
+    """原子化保存配置到文件。"""
+    errors = config.validate()
+    if errors:
+        logger.warning("配置存在校验警告: %s", errors)
     os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+    temp_file = f"{CONFIG_FILE}.tmp"
+    with open(temp_file, "w", encoding="utf-8") as f:
         json.dump(asdict(config), f, indent=2, ensure_ascii=False)
+    os.replace(temp_file, CONFIG_FILE)
